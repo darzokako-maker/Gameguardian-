@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
-#include <fstream>  // 🚨 HATA 1 ÇÖZÜLDÜ: ifstream için bu kütüphane şarttır!
+#include <fstream>  
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -61,12 +61,12 @@ Java_com_nova_stealth_FloatingMenuService_getPidByName(JNIEnv* env, jobject thiz
 std::vector<MemoryRegion> get_writable_regions(int pid) {
     std::vector<MemoryRegion> regions;
     std::string maps_path = "/proc/" + std::to_string(pid) + "/maps";
-    // 🚨 HATA 1 ÇÖZÜLDÜ: fstream eklendiği için artık ifstream tam olarak tanımlanabiliyor
     std::ifstream file(maps_path);
     if (!file.is_open()) return regions;
     
     std::string line;
-    while (std::get_line(file, line)) {
+    // 🚨 KRİTİK DÜZELTME: std::get_line hatası std::getline olarak düzeltildi
+    while (std::getline(file, line)) {
         if (line.find("rw-p") != std::string::npos && line.find("stack") == std::string::npos && line.find("ashmem") == std::string::npos) {
             char hyphen;
             long long start, end;
@@ -194,7 +194,6 @@ Java_com_nova_stealth_FloatingMenuService_getResultsString(JNIEnv* env, jobject 
     if (g_matches.size() > 15) result_str += "...ve daha fazlası";
     if (g_matches.empty()) result_str = "Sonuç yok. Önce tarama yapın.";
     
-    // 🚨 HATA 2 ÇÖZÜLDÜ: .c_str() eklenerek std::string, jstring uyumlu const char*'a dönüştürüldü
     return env->NewStringUTF(result_str.c_str());
 }
 
@@ -218,6 +217,5 @@ Java_com_nova_stealth_FloatingMenuService_analyzePointer(JNIEnv* env, jobject th
     std::stringstream ss;
     ss << "Base: 0x" << std::hex << base_start << "\nOffset: 0x" << std::hex << offset;
     
-    // 🚨 HATA 2 ÇÖZÜLDÜ: .c_str() eklenerek JNI tür hatası giderildi
     return env->NewStringUTF(ss.str().c_str());
 }
