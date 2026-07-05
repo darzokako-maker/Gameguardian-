@@ -14,10 +14,11 @@ public class MainActivity extends AppCompatActivity {
     private static final int OVERLAY_PERMISSION_REQ_CODE = 5469;
 
     @Override
-    protected void Bundle) {
+    protected void onCreate(Bundle savedInstanceState) {
+        // 🚨 KRİTİK DÜZELTME: protected void Bundle) hatası, standart onCreate yapısına dönüştürüldü!
         super.onCreate(savedInstanceState);
         
-        // Basit bir ana ekran tasarımı oluşturuyoruz
+        // Basit bir ana ekran tasarımı ve buton oluşturuyoruz
         Button startButton = new Button(this);
         startButton.setText("Hile Menüsünü Başlat");
         setContentView(startButton);
@@ -68,5 +69,4 @@ public class MainActivity extends AppCompatActivity {
             }
         }
     }
-          }
-
+}
