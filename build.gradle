@@ -1,17 +1,9 @@
-// Kök dizindeki build.gradle dosyasının tamamı
+// Kök dizindeki build.gradle dosyasının tam ve temiz hali
 plugins {
     id 'com.android.application' version '8.1.0' apply false
     id 'com.android.library' version '8.1.0' apply false
 }
 
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-
 task clean(type: Delete) {
     delete rootProject.buildDir
 }
-
