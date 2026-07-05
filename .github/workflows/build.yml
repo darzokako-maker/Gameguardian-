@@ -1,0 +1,39 @@
+name: NovaMem Stealth APK Builder
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Kodu Depodan Çek
+      uses: actions/checkout@v4
+
+    - name: Java JDK 17 Kurulumu
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+        cache: 'gradle'
+
+    - name: Android NDK (ARM64 Derleyici) ve CMake Kurulumu
+      uses: android-actions/setup-android@v3
+      with:
+        ndk-version: '25.2.9519653'
+        cmake-version: '3.22.1'
+
+    - name: Gradle Komut Yetkilerini Ayarla
+      run: chmod +x gradlew
+
+    - name: Projeyi APK Olarak Derle
+      run: ./gradlew assembleRelease
+
+    - name: Hazır APK Dosyasını Serbest Bırak (Artifact)
+      uses: actions/upload-artifact@v4
+      with:
+        name: NovaMemStealthBypass
+        path: app/build/outputs/apk/release/*.apk
+        
