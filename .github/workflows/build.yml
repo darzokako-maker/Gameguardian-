@@ -19,7 +19,7 @@ jobs:
         java-version: '17'
         cache: 'gradle'
 
-    - name: Android NDK (ARM64 Derleyici) ve CMake Kurulumu
+    - name: Android NDK ve CMake Kurulumu
       uses: android-actions/setup-android@v3
       with:
         ndk-version: '25.2.9519653'
@@ -31,21 +31,35 @@ jobs:
     - name: Projeyi APK Olarak Derle
       run: ./gradlew assembleRelease
 
-    # 🚨 YENİ ADIM: Telefonun APK'yı kabul etmesi için otomatik dijital imza basıyoruz
-    - name: APK Dosyasını İmzala (Sign)
-      uses: r0adkll/sign-android-release@v1
-      id: sign_app
-      with:
-        releaseDirectory: app/build/outputs/apk/release
-        signingKeyBase64: "" # Boş bırakıldığında Actions bizim için geçici bir test anahtarı (debug/test key) üretir
-        alias: test_alias
-        keyStorePassword: test_password
-        keyPassword: test_password
+    # 🚨 DÜZELTME ADIMI: Harici araç kullanmadan, sistemdeki güncel Android SDK araçlarıyla manuel imzalama yapıyoruz
+    - name: Yerleşik Araçlarla APK Hizala ve İmzala
+      run: |
+        # 1. Sunucudaki en güncel build-tools klasörünü otomatik tespit et
+        BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
+        echo "Kullanılan Android Build Tools Yolu: $BUILD_TOOLS_DIR"
+        
+        # Klasör yolları kolaylığı için değişkenleri ata
+        ORIGINAL_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+        # Eğer yukarıdaki adla üretilmediyse klasördeki .apk uzantılı ilk dosyayı seç
+        if [ ! -f "$ORIGINAL_APK" ]; then
+          ORIGINAL_APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+        fi
+        
+        # 2. Geçici bir Keystore (Dijital Sertifika Anahtarı) üret
+        keytool -genkeypair -v -keystore test.keystore -alias test_alias -keyalg RSA -keysize 2048 -validity 10000 -storepass test_password -keypass test_password -dname "CN=Nova, O=Stealth, C=TR"
+        
+        # 3. APK'yı optimize et (zipalign)
+        $BUILD_TOOLS_DIR/zipalign -v 4 "$ORIGINAL_APK" app/build/outputs/apk/release/NovaMemStealth_Aligned.apk
+        
+        # 4. APK'yı dijital olarak imzala (apksigner)
+        $BUILD_TOOLS_DIR/apksigner sign --ks test.keystore --ks-pass pass:test_password --key-pass pass:test_password --out app/build/outputs/apk/release/NovaMemStealth_Signed.apk app/build/outputs/apk/release/NovaMemStealth_Aligned.apk
+        
+        # 5. İmzanın geçerli olup olmadığını doğrula (opsiyonel)
+        $BUILD_TOOLS_DIR/apksigner verify app/build/outputs/apk/release/NovaMemStealth_Signed.apk
 
     - name: İmzalı APK Dosyasını Çıktı Olarak Ver (Artifact)
       uses: actions/upload-artifact@v4
       with:
-        name: NovaMemStealthBypass-Yüklenebilir
-        # Alttaki yol sayesinde sadece az önce imzalanmış olan güvenli APK'yı çıktı verir
-        path: ${{ steps.sign_app.outputs.signedReleaseFile }}
+        name: NovaMemStealthBypass-Yuklenebilir
+        path: app/build/outputs/apk/release/NovaMemStealth_Signed.apk
         
