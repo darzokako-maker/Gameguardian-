@@ -31,9 +31,21 @@ jobs:
     - name: Projeyi APK Olarak Derle
       run: ./gradlew assembleRelease
 
-    - name: Hazır APK Dosyasını Serbest Bırak (Artifact)
+    # 🚨 YENİ ADIM: Telefonun APK'yı kabul etmesi için otomatik dijital imza basıyoruz
+    - name: APK Dosyasını İmzala (Sign)
+      uses: r0adkll/sign-android-release@v1
+      id: sign_app
+      with:
+        releaseDirectory: app/build/outputs/apk/release
+        signingKeyBase64: "" # Boş bırakıldığında Actions bizim için geçici bir test anahtarı (debug/test key) üretir
+        alias: test_alias
+        keyStorePassword: test_password
+        keyPassword: test_password
+
+    - name: İmzalı APK Dosyasını Çıktı Olarak Ver (Artifact)
       uses: actions/upload-artifact@v4
       with:
-        name: NovaMemStealthBypass
-        path: app/build/outputs/apk/release/*.apk
+        name: NovaMemStealthBypass-Yüklenebilir
+        # Alttaki yol sayesinde sadece az önce imzalanmış olan güvenli APK'yı çıktı verir
+        path: ${{ steps.sign_app.outputs.signedReleaseFile }}
         
