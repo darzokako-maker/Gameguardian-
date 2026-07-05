@@ -3,6 +3,7 @@ package com.nova.stealth;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.os.IBinder;
@@ -20,21 +21,29 @@ import android.widget.Toast;
 
 public class FloatingMenuService extends Service {
     private WindowManager windowManager;
-    private LinearLayout floatingView;
+    private LinearLayout rootContainer; // Kapsayıcı ana katman
+    private LinearLayout menuContentView; // İçerik katmanı (Gizlenip açılabilen)
+    private Button toggleButton; // Menüyü küçültme/büyütme butonu
     private WindowManager.LayoutParams params;
+    
+    private boolean isMinimized = false;
     private int currentPid = -1;
+    private int currentType = 1; // 1: DWORD, 2: FLOAT
 
     static {
         System.loadLibrary("stealth");
     }
 
+    // C++ Tarafındaki Yeni Yapıya Uygun JNI Metot Tanımları
     public native int getPidByName(String packageName);
     public native int firstScan(int pid, int type, float value);
     public native int nextScan(int pid, int type, int mode, float value);
     public native boolean writeAll(int pid, int type, float value);
     public native boolean writeIndex(int pid, int index, int type, float value);
     public native String getResultsString();
-    public native String analyzePointer(int pid, int index);
+    
+    // C++ kodundaki yeni pointer bulma mekanizmasının JNI karşılığı
+    public native String otomatikPointerBul(int pid, long long targetAddress);
 
     @Override
     public IBinder onBind(Intent intent) { return null; }
@@ -44,40 +53,59 @@ public class FloatingMenuService extends Service {
         super.onCreate();
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
 
-        // Ana Konteyner (Daha Büyük ve Ferah Tasarım)
-        floatingView = new LinearLayout(this);
-        floatingView.setOrientation(LinearLayout.VERTICAL);
-        floatingView.setBackgroundColor(Color.parseColor("#F2141414")); // Yarı saydam net siyah teması
-        floatingView.setPadding(35, 35, 35, 35); // İç boşluklar genişletildi
+        // 1. ANA KAPLAYICI (Root)
+        rootContainer = new LinearLayout(this);
+        rootContainer.setOrientation(LinearLayout.VERTICAL);
+
+        // 2. KÜÇÜLTME / BÜYÜTME BUTONU (Her zaman görünür)
+        toggleButton = new Button(this);
+        toggleButton.setText("▼ MENÜYÜ GİZLE / GÖSTER");
+        toggleButton.setBackgroundColor(Color.parseColor("#FF0057"));
+        toggleButton.setTextColor(Color.WHITE);
+        toggleButton.setPadding(15, 15, 15, 15);
+        toggleButton.setOnClickListener(v -> toggleMenuVisibility());
+        rootContainer.addView(toggleButton);
+
+        // 3. AŞAĞI KAYDIRILABİLİR İÇERİK ALANI (ScrollView)
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f);
+        scrollView.setLayoutParams(scrollParams);
+
+        // 4. MENÜ İÇERİK PANELİ
+        menuContentView = new LinearLayout(this);
+        menuContentView.setOrientation(LinearLayout.VERTICAL);
+        menuContentView.setBackgroundColor(Color.parseColor("#FA121212")); // Çok koyu şık arka plan
+        menuContentView.setPadding(40, 30, 40, 30);
 
         // Başlık
         TextView tvTitle = new TextView(this);
-        tvTitle.setText("🚀 NovaMem Engine Pro v5.0");
+        tvTitle.setText("🔥 NovaMem Ultra v3.5");
         tvTitle.setTextColor(Color.parseColor("#00FFC4"));
-        tvTitle.setTextSize(20); // Yazı boyutu büyütüldü
-        tvTitle.setPadding(0, 0, 0, 20);
+        tvTitle.setTextSize(22);
         tvTitle.setGravity(Gravity.CENTER);
-        floatingView.addView(tvTitle);
+        tvTitle.setPadding(0, 0, 0, 25);
+        menuContentView.addView(tvTitle);
 
-        // 1. OYUN PAKET ADI GİRİŞİ
+        // Paket Adı Girişi
         final EditText etPackage = new EditText(this);
-        etPackage.setHint("com.tencent.ig (Paket Adı)");
+        etPackage.setHint("Uygulama Paket Adı (Örn: com.target.app)");
         etPackage.setHintTextColor(Color.GRAY);
         etPackage.setTextColor(Color.WHITE);
         etPackage.setTextSize(16);
-        setupInputKeyboardBehavior(etPackage); // Klavyeyi otomatik tetikleyen fonksiyon
-        floatingView.addView(etPackage);
+        setupKeyboardBehavior(etPackage);
+        menuContentView.addView(etPackage);
 
         final TextView tvPidStatus = new TextView(this);
-        tvPidStatus.setText("Durum: Oyuna Bağlanılmadı");
+        tvPidStatus.setText("Durum: Bağlantı Yok");
         tvPidStatus.setTextColor(Color.YELLOW);
         tvPidStatus.setTextSize(14);
-        tvPidStatus.setPadding(0, 10, 0, 10);
-        floatingView.addView(tvPidStatus);
+        tvPidStatus.setPadding(0, 10, 0, 15);
+        menuContentView.addView(tvPidStatus);
 
         Button btnFindPid = new Button(this);
-        btnFindPid.setText("Oyuna Otomatik Bağlan (PID)");
-        btnFindPid.setPadding(20, 25, 20, 25); // Parmakla rahat basılması için buton büyütüldü
+        btnFindPid.setText("Bağlan (PID Bul)");
+        btnFindPid.setPadding(20, 25, 20, 25);
         btnFindPid.setOnClickListener(v -> {
             closeKeyboard(v);
             String pkg = etPackage.getText().toString().trim();
@@ -86,189 +114,161 @@ public class FloatingMenuService extends Service {
                 tvPidStatus.setText("✔ Bağlanıldı! PID: " + currentPid);
                 tvPidStatus.setTextColor(Color.GREEN);
             } else {
-                tvPidStatus.setText("❌ Hata: Oyun Açık Değil!");
+                tvPidStatus.setText("❌ Hata: Süreç Bulunamadı!");
                 tvPidStatus.setTextColor(Color.RED);
             }
         });
-        floatingView.addView(btnFindPid);
+        menuContentView.addView(btnFindPid);
 
-        // 2. VERİ TÜRÜ VE DEĞER ARAMA ALANI
+        // Değer Girişi
         final EditText etValue = new EditText(this);
         etValue.setHint("Aranacak / Yazılacak Değer");
         etValue.setHintTextColor(Color.GRAY);
         etValue.setTextColor(Color.WHITE);
         etValue.setTextSize(16);
-        setupInputKeyboardBehavior(etValue);
-        floatingView.addView(etValue);
+        setupKeyboardBehavior(etValue);
+        menuContentView.addView(etValue);
 
+        // Veri Türü Seçimi
         final Button btnType = new Button(this);
         btnType.setText("Tür: DWORD (Integer)");
         btnType.setPadding(20, 25, 20, 25);
-        final int[] currentType = {1};
         btnType.setOnClickListener(v -> {
             closeKeyboard(v);
-            if (currentType[0] == 1) {
-                currentType[0] = 2;
+            if (currentType == 1) {
+                currentType = 2;
                 btnType.setText("Tür: FLOAT (Ondalıklı)");
             } else {
-                currentType[0] = 1;
+                currentType = 1;
                 btnType.setText("Tür: DWORD (Integer)");
             }
         });
-        floatingView.addView(btnType);
+        menuContentView.addView(btnType);
 
-        // Tarama Butonları Satırı
+        // Tarama ve Filtreleme Buton Satırı
         LinearLayout rowScan = new LinearLayout(this);
         rowScan.setOrientation(LinearLayout.HORIZONTAL);
         rowScan.setWeightSum(2);
-
-        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
-        buttonParams.setMargins(5, 10, 5, 10);
+        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+        btnParams.setMargins(5, 10, 5, 10);
 
         Button btnFirstScan = new Button(this);
         btnFirstScan.setText("İlk Tarama");
-        btnFirstScan.setLayoutParams(buttonParams);
+        btnFirstScan.setLayoutParams(btnParams);
         btnFirstScan.setPadding(10, 25, 10, 25);
         btnFirstScan.setOnClickListener(v -> {
             closeKeyboard(v);
-            if (currentPid == -1) { Toast.makeText(this, "Önce PID bulun!", Toast.LENGTH_SHORT).show(); return; }
+            if (currentPid <= 0) { Toast.makeText(this, "Önce PID Alın!", Toast.LENGTH_SHORT).show(); return; }
             try {
                 float val = Float.parseFloat(etValue.getText().toString());
-                int count = firstScan(currentPid, currentType[0], val);
+                int count = firstScan(currentPid, currentType, val);
                 Toast.makeText(this, "Bulunan Adres: " + count, Toast.LENGTH_LONG).show();
-            } catch (Exception e) {
-                Toast.makeText(this, "Geçerli bir sayı girin!", Toast.LENGTH_SHORT).show();
-            }
+            } catch (Exception e) { Toast.makeText(this, "Geçersiz değer!", Toast.LENGTH_SHORT).show(); }
         });
         rowScan.addView(btnFirstScan);
 
         Button btnNextScan = new Button(this);
         btnNextScan.setText("Filtrele");
-        btnNextScan.setLayoutParams(buttonParams);
+        btnNextScan.setLayoutParams(btnParams);
         btnNextScan.setPadding(10, 25, 10, 25);
         btnNextScan.setOnClickListener(v -> {
             closeKeyboard(v);
-            if (currentPid == -1) return;
+            if (currentPid <= 0) return;
             try {
                 float val = Float.parseFloat(etValue.getText().toString());
-                int count = nextScan(currentPid, currentType[0], 1, val);
+                int count = nextScan(currentPid, currentType, 1, val);
                 Toast.makeText(this, "Kalan Adres: " + count, Toast.LENGTH_LONG).show();
-            } catch (Exception e) {
-                Toast.makeText(this, "Geçerli bir sayı girin!", Toast.LENGTH_SHORT).show();
-            }
+            } catch (Exception e) { Toast.makeText(this, "Geçersiz değer!", Toast.LENGTH_SHORT).show(); }
         });
         rowScan.addView(btnNextScan);
-        floatingView.addView(rowScan);
+        menuContentView.addView(rowScan);
 
-        // 3. TOPLU İŞLEMLER
+        // Toplu İşlemler
         Button btnWriteAll = new Button(this);
-        btnWriteAll.setText("Hepsini Birden Değiştir");
+        btnWriteAll.setText("Hepsini Değiştir");
         btnWriteAll.setPadding(20, 25, 20, 25);
-        btnWriteAll.setBackgroundColor(Color.parseColor("#CC222222"));
-        btnWriteAll.setTextColor(Color.WHITE);
         btnWriteAll.setOnClickListener(v -> {
             closeKeyboard(v);
-            if (currentPid == -1) return;
+            if (currentPid <= 0) return;
             try {
                 float val = Float.parseFloat(etValue.getText().toString());
-                boolean ok = writeAll(currentPid, currentType[0], val);
-                Toast.makeText(this, ok ? "Tümü Güncellendi!" : "Hata!", Toast.LENGTH_SHORT).show();
-            } catch (Exception e) {
-                Toast.makeText(this, "Hatalı Değer!", Toast.LENGTH_SHORT).show();
-            }
+                boolean ok = writeAll(currentPid, currentType, val);
+                Toast.makeText(this, ok ? "Tümü Değiştirildi!" : "Başarısız!", Toast.LENGTH_SHORT).show();
+            } catch (Exception e) { Toast.makeText(this, "Hatalı değer!", Toast.LENGTH_SHORT).show(); }
         });
-        floatingView.addView(btnWriteAll);
+        menuContentView.addView(btnWriteAll);
 
-        // 4. CANLI ADRES GÖSTERİM ALANI
-        TextView tvResultsTitle = new TextView(this);
-        tvResultsTitle.setText("\n=== CANLI ADRES LİSTESİ ===");
-        tvResultsTitle.setTextColor(Color.MAGENTA);
-        tvResultsTitle.setTextSize(14);
-        floatingView.addView(tvResultsTitle);
-
-        ScrollView scrollView = new ScrollView(this);
-        // Liste görünüm kutusu parmakla rahat kaydırılsın diye büyütüldü (Genişlik: 550, Yükseklik: 300)
-        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(550, 300);
-        scrollView.setLayoutParams(scrollParams);
-        scrollView.setBackgroundColor(Color.parseColor("#33000000"));
-
-        final TextView tvResultsList = new TextView(this);
-        tvResultsList.setText("Tarama yapıldığında adresler burada listelenir...");
-        tvResultsList.setTextColor(Color.WHITE);
-        tvResultsList.setTextSize(14);
-        tvResultsList.setPadding(10, 10, 10, 10);
-        scrollView.addView(tvResultsList);
-        floatingView.addView(scrollView);
-
-        Button btnRefreshList = new Button(this);
-        btnRefreshList.setText("Listeyi Yenile");
-        btnRefreshList.setPadding(20, 20, 20, 20);
-        btnRefreshList.setOnClickListener(v -> {
+        // Sonuç Gösterim Alanı (Yenileme Butonlu)
+        final TextView tvResults = new TextView(this);
+        tvResults.setText("Sonuçlar burada listelenir...");
+        tvResults.setTextColor(Color.WHITE);
+        tvResults.setTextSize(14);
+        tvResults.setBackgroundColor(Color.parseColor("#22000000"));
+        tvResults.setPadding(15, 15, 15, 15);
+        
+        Button btnRefresh = new Button(this);
+        btnRefresh.setText("Sonuç Listesini Yenile");
+        btnRefresh.setPadding(10, 15, 10, 15);
+        btnRefresh.setOnClickListener(v -> {
             closeKeyboard(v);
-            tvResultsList.setText(getResultsString());
+            tvResults.setText(getResultsString());
         });
-        floatingView.addView(btnRefreshList);
+        menuContentView.addView(btnRefresh);
+        menuContentView.addView(tvResults);
 
-        // Tekil İndeks ve Ofset Alanı
+        // İndeks ve Pointer Arama Alanı
         final EditText etIndex = new EditText(this);
-        etIndex.setHint("İşlem Yapılacak İndeks No (Örn: 0)");
+        etIndex.setHint("İşlem Yapılacak İndeks (Örn: 0)");
         etIndex.setHintTextColor(Color.GRAY);
         etIndex.setTextColor(Color.WHITE);
         etIndex.setTextSize(16);
-        setupInputKeyboardBehavior(etIndex);
-        floatingView.addView(etIndex);
+        setupKeyboardBehavior(etIndex);
+        menuContentView.addView(etIndex);
 
         LinearLayout rowSingle = new LinearLayout(this);
         rowSingle.setOrientation(LinearLayout.HORIZONTAL);
         rowSingle.setWeightSum(2);
 
         Button btnWriteSingle = new Button(this);
-        btnWriteSingle.setText("Tekli Değiştir");
-        btnWriteSingle.setLayoutParams(buttonParams);
+        btnWriteSingle.setText("Tekli Yaz");
+        btnWriteSingle.setLayoutParams(btnParams);
         btnWriteSingle.setPadding(10, 25, 10, 25);
         btnWriteSingle.setOnClickListener(v -> {
             closeKeyboard(v);
             try {
                 int idx = Integer.parseInt(etIndex.getText().toString());
                 float val = Float.parseFloat(etValue.getText().toString());
-                writeIndex(currentPid, idx, currentType[0], val);
-            } catch (Exception e) {
-                Toast.makeText(this, "İndeks veya Değer Geçersiz!", Toast.LENGTH_SHORT).show();
-            }
+                writeIndex(currentPid, idx, currentType, val);
+            } catch (Exception e) { Toast.makeText(this, "Hata!", Toast.LENGTH_SHORT).show(); }
         });
         rowSingle.addView(btnWriteSingle);
 
-        Button btnAnalyze = new Button(this);
-        btnAnalyze.setText("Ofset Bul");
-        btnAnalyze.setLayoutParams(buttonParams);
-        btnAnalyze.setPadding(10, 25, 10, 25);
-        btnAnalyze.setOnClickListener(v -> {
+        Button btnPointerScanner = new Button(this);
+        btnPointerScanner.setText("Oto Pointer Bul");
+        btnPointerScanner.setLayoutParams(btnParams);
+        btnPointerScanner.setPadding(10, 25, 10, 25);
+        btnPointerScanner.setOnClickListener(v -> {
             closeKeyboard(v);
             try {
                 int idx = Integer.parseInt(etIndex.getText().toString());
-                String report = analyzePointer(currentPid, idx);
-                Toast.makeText(this, report, Toast.LENGTH_LONG).show();
-            } catch (Exception e) {
-                Toast.makeText(this, "İndeks Hatalı!", Toast.LENGTH_SHORT).show();
-            }
+                // C++ tarafındaki pointer bulma mantığı tetikleniyor
+                // Bu örnekte seçilen indeksteki adresi bir long değer varsayarak C++ fonksiyonuna aktarıyoruz
+                String res = otomatikPointerBul(currentPid, idx); 
+                tvResults.setText(res);
+            } catch (Exception e) { Toast.makeText(this, "Geçerli bir indeks girin!", Toast.LENGTH_SHORT).show(); }
         });
-        rowSingle.addView(btnAnalyze);
-        floatingView.addView(rowSingle);
+        rowSingle.addView(btnPointerScanner);
+        menuContentView.addView(rowSingle);
 
-        // Menü Konumlandırma Ayarları (Kapsayıcı Genişlik Artırıldı)
-        params = new WindowManager.LayoutParams(
-                650, // Sabit ve rahat genişlik (Geniş menü)
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, // Başlangıçta klavye engeli yok
-                PixelFormat.TRANSLUCENT
-        );
-        params.gravity = Gravity.TOP | Gravity.START;
-        params.x = 100; params.y = 100;
+        // Katmanları Birleştir
+        scrollView.addView(menuContentView);
+        rootContainer.addView(scrollView);
 
-        // Sürükleme Mekanizması
-        floatingView.setOnTouchListener(new View.OnTouchListener() {
+        // 5. WINDOW MANAGER AYARLARI (Boyut Optimizasyonu)
+        updateMenuDimensions();
+
+        // Sürükleme Mekanizması (Sadece en üstteki buton ile taşınabilir)
+        toggleButton.setOnTouchListener(new View.OnTouchListener() {
             private int initialX, initialY;
             private float initialTouchX, initialTouchY;
             @Override
@@ -281,26 +281,83 @@ public class FloatingMenuService extends Service {
                     case MotionEvent.ACTION_MOVE:
                         params.x = initialX + (int) (event.getRawX() - initialTouchX);
                         params.y = initialY + (int) (event.getRawY() - initialTouchY);
-                        windowManager.updateViewLayout(floatingView, params);
+                        windowManager.updateViewLayout(rootContainer, params);
                         return true;
                 }
                 return false;
             }
         });
 
-        windowManager.addView(floatingView, params);
+        windowManager.addView(rootContainer, params);
     }
 
-    // 🚨 AKILLI YAZI KUTUSU DAVRANIŞI: Kutuya dokunulduğu an ekranı klavyeye odaklar
-    private void setupInputKeyboardBehavior(final EditText editText) {
+    // 🚨 YATAY / DİKEY EKRAN DEĞİŞİMİ KONTROLÜ
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // Ekran döndüğünde boyutları yeniden hesapla ve güncelle
+        updateMenuDimensions();
+    }
+
+    // 🚨 DİNAMİK BOYUTLANDIRMA FONKSİYONU (Yatayda ve Dikeyde Taşmayı Önler)
+    private void updateMenuDimensions() {
+        int orientation = getResources().getConfiguration().orientation;
+        int menuWidth;
+        int menuHeight;
+
+        if (isMinimized) {
+            menuWidth = WindowManager.LayoutParams.WRAP_CONTENT;
+            menuHeight = WindowManager.LayoutParams.WRAP_CONTENT;
+        } else {
+            if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                // Ekran yatayken menüyü yana doğru genişlet, yüksekliği sınırla
+                menuWidth = 800; 
+                menuHeight = 500; 
+            } else {
+                // Ekran dikeyken standart geniş ve ferah görünüm
+                menuWidth = 720; 
+                menuHeight = 950; 
+            }
+        }
+
+        if (params == null) {
+            params = new WindowManager.LayoutParams(
+                    menuWidth, menuHeight,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                    PixelFormat.TRANSLUCENT
+            );
+            params.gravity = Gravity.TOP | Gravity.START;
+            params.x = 50; params.y = 50;
+        } else {
+            params.width = menuWidth;
+            params.height = menuHeight;
+            windowManager.updateViewLayout(rootContainer, params);
+        }
+    }
+
+    // 🚨 TEK BUTONLA GİZLE / AÇ (Minimize Mekanizması)
+    private void toggleMenuVisibility() {
+        if (isMinimized) {
+            menuContentView.setVisibility(View.VISIBLE);
+            toggleButton.setText("▼ MENÜYÜ GİZLE / GÖSTER");
+            isMinimized = false;
+        } else {
+            menuContentView.setVisibility(View.GONE);
+            toggleButton.setText("▲ NovaMem");
+            isMinimized = true;
+        }
+        updateMenuDimensions();
+    }
+
+    // 🚨 KLAVYE ODAKLAMA YARDIMCISI
+    private void setupKeyboardBehavior(final EditText editText) {
         editText.setOnTouchListener((v, event) -> {
             if (event.getAction() == MotionEvent.ACTION_UP) {
-                // Odaklanmayı aç
                 params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-                windowManager.updateViewLayout(floatingView, params);
+                windowManager.updateViewLayout(rootContainer, params);
                 editText.requestFocus();
                 
-                // Klavyeyi zorla göster
                 InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
                 if (imm != null) {
                     imm.showSoftInput(editText, InputMethodManager.SHOW_IMPLICIT);
@@ -310,21 +367,19 @@ public class FloatingMenuService extends Service {
         });
     }
 
-    // 🚨 KLAVYE KAPATMA YARDIMCISI: İşlem butonlarına basıldığında odağı bırakır ve klavyeyi kapatır
     private void closeKeyboard(View view) {
         InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
         if (imm != null) {
             imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
         }
-        // Oyunu engellememek için odağı tekrar kapat
         params.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-        windowManager.updateViewLayout(floatingView, params);
-        floatingView.clearFocus();
+        windowManager.updateViewLayout(rootContainer, params);
+        rootContainer.clearFocus();
     }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (floatingView != null) windowManager.removeView(floatingView);
+        if (rootContainer != null) windowManager.removeView(rootContainer);
     }
 }
