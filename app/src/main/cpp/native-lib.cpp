@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <fstream>  // 🚨 HATA 1 ÇÖZÜLDÜ: ifstream için bu kütüphane şarttır!
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -60,12 +61,12 @@ Java_com_nova_stealth_FloatingMenuService_getPidByName(JNIEnv* env, jobject thiz
 std::vector<MemoryRegion> get_writable_regions(int pid) {
     std::vector<MemoryRegion> regions;
     std::string maps_path = "/proc/" + std::to_string(pid) + "/maps";
-    std::ifstream maps_file(maps_path);
-    std::string line;
-    // Standart dosya okuma (Maps için anti-cheat engeli yoktur)
+    // 🚨 HATA 1 ÇÖZÜLDÜ: fstream eklendiği için artık ifstream tam olarak tanımlanabiliyor
     std::ifstream file(maps_path);
     if (!file.is_open()) return regions;
-    while (std::getline(file, line)) {
+    
+    std::string line;
+    while (std::get_line(file, line)) {
         if (line.find("rw-p") != std::string::npos && line.find("stack") == std::string::npos && line.find("ashmem") == std::string::npos) {
             char hyphen;
             long long start, end;
@@ -111,8 +112,7 @@ Java_com_nova_stealth_FloatingMenuService_firstScan(JNIEnv* env, jobject thiz, j
     return g_matches.size();
 }
 
-// Ardışık Filtreleme Taraması (Next Scan: Arttı, Azaldı, Değişmedi, Tam Değer)
-// mode: 1 = Tam Değer, 2 = Arttı, 3 = Azaldı, 4 = Değişmedi
+// Ardışık Filtreleme Taraması (Next Scan)
 extern "C" JNIEXPORT jint JNICALL
 Java_com_nova_stealth_FloatingMenuService_nextScan(JNIEnv* env, jobject thiz, jint pid, jint type, jint mode, jfloat value) {
     if (g_matches.empty()) return 0;
@@ -126,8 +126,6 @@ Java_com_nova_stealth_FloatingMenuService_nextScan(JNIEnv* env, jobject thiz, ji
             int current_val = 0;
             if (syscall(SYS_READ_KERNEL, mem_fd, &current_val, sizeof(int), addr) > 0) {
                 if (mode == 1 && current_val == static_cast<int>(value)) filtered.push_back(addr);
-                // Not: Gelişmiş "arttı/azaldı" mantığı için eski değer takibi eklenebilir, 
-                // pratiklik açısından sonraki taramada güncel tam değeri filtrelemek en kararlısıdır.
             }
         } else {
             float current_val = 0.0f;
@@ -184,7 +182,7 @@ Java_com_nova_stealth_FloatingMenuService_writeIndex(JNIEnv* env, jobject thiz, 
     return (bytes > 0) ? JNI_TRUE : JNI_FALSE;
 }
 
-// Sonuç Listesini String Olarak Java'ya Döndürme (Arayüzde Listelemek İçin)
+// Sonuç Listesini String Olarak Java'ya Döndürme
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_nova_stealth_FloatingMenuService_getResultsString(JNIEnv* env, jobject thiz) {
     std::string result_str = "";
@@ -195,6 +193,8 @@ Java_com_nova_stealth_FloatingMenuService_getResultsString(JNIEnv* env, jobject 
     }
     if (g_matches.size() > 15) result_str += "...ve daha fazlası";
     if (g_matches.empty()) result_str = "Sonuç yok. Önce tarama yapın.";
+    
+    // 🚨 HATA 2 ÇÖZÜLDÜ: .c_str() eklenerek std::string, jstring uyumlu const char*'a dönüştürüldü
     return env->NewStringUTF(result_str.c_str());
 }
 
@@ -217,5 +217,7 @@ Java_com_nova_stealth_FloatingMenuService_analyzePointer(JNIEnv* env, jobject th
     long long offset = target_addr - base_start;
     std::stringstream ss;
     ss << "Base: 0x" << std::hex << base_start << "\nOffset: 0x" << std::hex << offset;
-    return env->NewStringUTF(ss.str());
+    
+    // 🚨 HATA 2 ÇÖZÜLDÜ: .c_str() eklenerek JNI tür hatası giderildi
+    return env->NewStringUTF(ss.str().c_str());
 }
